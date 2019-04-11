@@ -1,0 +1,66 @@
+proxy_cache_path /var/cache/nginx-api levels=1 keys_zone=apicache:30m max_size=5g;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name apiproxy.example.com;
+
+    # redirect http to https
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name apiproxy.example.com;
+
+    # OPTIONAL: apply custom log format to allow caching statistics
+    #access_log /var/log/nginx/api-cache.log nginx_cache;
+
+    ssl_certificate /path/to/apiproxy.example.com/fullchain.pem;
+    ssl_certificate_key /path/to/apiproxy.example.com/privkey.pem;
+    ssl_session_timeout 5m;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_tickets off;
+    ssl_protocols TLSv1.2;
+    ssl_ciphers 'EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH';
+    ssl_prefer_server_ciphers on;
+    add_header Strict-Transport-Security "max-age=15768000" always; # will be disregarded by disabling gzip
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    ssl_trusted_certificate /path/to/apiproxy.example.com/chain.pem;
+
+    # leave requests for static resources as-is
+    location /images/ {
+        proxy_pass https://api-gateway.external.com/images/;
+    }
+
+    location /stylesheets/ {
+        proxy_pass https://api-gateway.external.com/stylesheets/;
+    }
+
+    location /schemas/ {
+        proxy_pass https://api-gateway.external.com/schemas/;
+    }
+
+    # cache all other requests
+    location / {
+        add_header Cache-Control "no-cache, must-revalidate, max-age=0";
+
+        # disable gzip and re-write any references to the api itself
+        proxy_set_header Accept-Encoding "";
+        sub_filter 'https://api-gateway.external.com/' 'https://$server_name/';
+        sub_filter_types *;
+        sub_filter_once off;
+
+        # cache the requests
+        proxy_cache apicache;
+        proxy_cache_use_stale updating;
+        proxy_cache_lock on;
+        proxy_ignore_headers Cache-Control;
+        proxy_cache_valid any 30m;
+
+        proxy_ssl_server_name on;
+        proxy_pass https://api-gateway.external.com/;
+    }
+}
